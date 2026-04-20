@@ -2424,6 +2424,61 @@ async function getMyMonthlyAttendance(req, res) {
 //   A           → absent
 //   WO / WO-I   → skip     (weekend / week-off, not a working day)
 //   anything else → skip
+// Parse "DD/MM/YYYY" (Indian format used by fingerprint reports).
+// Returns a Date at local midnight, or null if invalid.
+function parseIndianDate(str) {
+  const match = String(str || "")
+    .trim()
+    .match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!match) return null;
+  const [, dd, mm, yyyy] = match;
+  const day = Number.parseInt(dd, 10);
+  const month = Number.parseInt(mm, 10);
+  const year = Number.parseInt(yyyy, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Scan the metadata rows above the data header for a report-level date such as
+//   "Date : 06/04/2026"  or  "On Dated : 06/04/2026"
+// This is the fallback when In Time / Out Time cells are time-only.
+function extractReportDate(rawRows, beforeIdx) {
+  for (let i = 0; i < beforeIdx; i += 1) {
+    for (const cell of rawRows[i] || []) {
+      const parsed = parseIndianDate(cell);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
+}
+
+// Combine a time-only string ("9:51", "19:06") with a base date. Returns an
+// object { date, time } where date is normalized midnight and time is "HH:MM".
+// Returns null if neither the cell itself nor the fallback date produce a
+// valid datetime.
+function resolvePunchDateTime(cellValue, fallbackDate) {
+  const str = String(cellValue || "").trim();
+  if (!str) return null;
+
+  // Try full datetime first (e.g. "2026-04-06 09:51:00").
+  const fullParsed = new Date(str);
+  if (!Number.isNaN(fullParsed.getTime()) && /\d{4}|T|-/.test(str)) {
+    return {
+      date: normalizeDate(fullParsed),
+      time: normalizeTime(fullParsed),
+    };
+  }
+
+  // Time-only value: combine with the report date from metadata.
+  const time = normalizeTime(str);
+  if (time && fallbackDate) {
+    return { date: normalizeDate(fallbackDate), time };
+  }
+
+  return null;
+}
+
 async function dailyDetailedUpload(req, res) {
   if (!req.file) {
     return res
@@ -2473,6 +2528,10 @@ async function dailyDetailedUpload(req, res) {
           "Make sure the file is a biometric daily attendance report.",
       });
     }
+
+    // Report-level date from metadata rows (e.g. "Date : 06/04/2026").
+    // Used as fallback when punch cells contain only "HH:MM".
+    const reportDate = extractReportDate(rawRows, headerRowIdx);
 
     // ── Resolve column positions dynamically ───────────────────────────────
     const normalize = (v) =>
@@ -2601,42 +2660,25 @@ async function dailyDetailedUpload(req, res) {
         continue;
       }
 
-      // ── Resolve attendance date from In Time datetime ────────────────────
-      // In Time comes as "2026-04-06 09:51:00" or a JS Date serialisation
-      let attendanceDate = null;
-      let checkInTime = "";
-      let checkOutTime = "";
+      // ── Resolve attendance date & times ──────────────────────────────────
+      // Cells may contain either a full datetime ("2026-04-06 09:51:00") or
+      // just "HH:MM" (Secureye detailed report). In the time-only case we
+      // combine with the report-level date from the metadata rows.
+      const inPunch = resolvePunchDateTime(inTimeRaw, reportDate);
+      const outPunch = resolvePunchDateTime(outTimeRaw, reportDate);
 
-      if (inTimeRaw) {
-        const parsed = new Date(inTimeRaw);
-        if (!Number.isNaN(parsed.getTime())) {
-          attendanceDate = normalizeDate(parsed);
-          checkInTime = normalizeTime(parsed);
-        }
-      }
-
-      // Fallback: try to derive date from Out Time
-      if (!attendanceDate && outTimeRaw) {
-        const parsed = new Date(outTimeRaw);
-        if (!Number.isNaN(parsed.getTime())) {
-          attendanceDate = normalizeDate(parsed);
-        }
-      }
+      const attendanceDate =
+        inPunch?.date || outPunch?.date || (reportDate ? normalizeDate(reportDate) : null);
+      const checkInTime = inPunch?.time || "";
+      const checkOutTime = outPunch?.time || "";
 
       if (!attendanceDate) {
         skipped += 1;
         errors.push(
-          `Row ${headerRowIdx + 2 + idx} (${empNameRaw || empCodeRaw}): could not parse attendance date from In Time value '${inTimeRaw}'.`,
+          `Row ${headerRowIdx + 2 + idx} (${empNameRaw || empCodeRaw}): could not determine attendance date. ` +
+            `In Time='${inTimeRaw}', Out Time='${outTimeRaw}'. Ensure the report header contains a 'Date : DD/MM/YYYY' cell.`,
         );
         continue;
-      }
-
-      // Out Time
-      if (outTimeRaw) {
-        const parsedOut = new Date(outTimeRaw);
-        if (!Number.isNaN(parsedOut.getTime())) {
-          checkOutTime = normalizeTime(parsedOut);
-        }
       }
 
       // ── Map status ───────────────────────────────────────────────────────

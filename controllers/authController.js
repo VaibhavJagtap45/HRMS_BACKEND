@@ -134,10 +134,19 @@ async function updateMe(req, res) {
 
 async function changePassword(req, res) {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPassword = String(req.body.currentPassword ?? "");
+    const newPassword = String(req.body.newPassword ?? "").trim();
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ message: "Current password and new password are required." });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters." });
+    }
+
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ message: "New password must be different from your current password." });
     }
 
     const user = await User.findById(req.user._id).select("+password");
@@ -152,9 +161,17 @@ async function changePassword(req, res) {
 
     user.password = newPassword;
     user.mustChangePassword = false;
-    user.tempPassword = '';   // self-change: HR-set temp is now stale
+    user.tempPassword = "";   // self-change: HR-set temp is now stale
+    // Invalidate any pending password-reset artefacts
+    user.passwordResetToken = null;
+    user.passwordResetExpires = null;
+    user.passwordResetOtp = null;
+    user.passwordResetOtpExpires = null;
+    user.passwordResetVerifiedToken = null;
+    user.passwordResetVerifiedExpires = null;
     await user.save();
 
+    // Re-issue a fresh JWT so the new credentials take effect immediately
     return sendAuthPayload(res, user);
   } catch (error) {
     return res.status(500).json({ message: "Server error.", error: error.message });
