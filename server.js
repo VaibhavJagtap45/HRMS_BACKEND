@@ -119,38 +119,116 @@ const holidayRoutes = require("./routes/holidays");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Frontend URL for production
-const frontendUrl =
-  process.env.CLIENT_URL ||
-  process.env.FRONTEND_URL ||
-  "https://albos-hrms.vercel.app";
+function normalizeOrigin(origin = "") {
+  return String(origin).trim().replace(/\/$/, "");
+}
 
-// Allowed origins
+function splitOrigins(value = "") {
+  return String(value)
+    .split(",")
+    .map(normalizeOrigin)
+    .filter(Boolean);
+}
+
+// Allowed origins. CLIENT_URL / FRONTEND_URL may contain one URL or a
+// comma-separated list, which is handy when Vercel has preview deployments.
 const allowedOrigins = [
-  frontendUrl,
+  ...splitOrigins(process.env.CLIENT_URL),
+  ...splitOrigins(process.env.FRONTEND_URL),
+  "https://albos-hrms.vercel.app",
+  "https://hrms.albostechnologies.com",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "http://localhost:3001",
   "http://127.0.0.1:3001",
-].filter(Boolean);
+].map(normalizeOrigin);
+
+const allowedOriginSet = new Set(allowedOrigins);
+
+function getAllowedOrigin(origin) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) return null;
+
+  const isAllowed =
+    allowedOriginSet.has(normalizedOrigin) ||
+    /^https:\/\/albos-hrms(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(
+      normalizedOrigin,
+    ) ||
+    // Production: apex + any subdomain of albostechnologies.com (hrms, www, ...)
+    /^https:\/\/(?:[a-z0-9-]+\.)?albostechnologies\.com$/i.test(
+      normalizedOrigin,
+    );
+
+  return isAllowed ? normalizedOrigin : null;
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  return Boolean(getAllowedOrigin(origin));
+}
+
+const corsMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const corsAllowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "X-Requested-With",
+];
+const corsExposedHeaders = [
+  "X-RateLimit-Limit",
+  "X-RateLimit-Remaining",
+  "X-RateLimit-Reset",
+];
 
 // CORS config
 const corsOptions = {
   origin(origin, callback) {
     // Allow requests with no Origin header like Postman, server-to-server, mobile apps
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    const error = new Error(`CORS blocked for origin: ${origin}`);
+    error.statusCode = 403;
+    return callback(error);
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: corsMethods,
+  allowedHeaders: corsAllowedHeaders,
+  exposedHeaders: corsExposedHeaders,
+  optionsSuccessStatus: 204,
 };
 
+function setCorsHeaders(req, res) {
+  const allowedOrigin = getAllowedOrigin(req.headers.origin);
+  if (!allowedOrigin) return false;
+
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Methods", corsMethods.join(", "));
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    req.headers["access-control-request-headers"] ||
+      corsAllowedHeaders.join(", "),
+  );
+  res.setHeader("Access-Control-Expose-Headers", corsExposedHeaders.join(", "));
+  res.vary("Origin");
+  res.vary("Access-Control-Request-Headers");
+  return true;
+}
+
 // Global middleware
+app.use((req, res, next) => {
+  const hasCorsHeaders = setCorsHeaders(req, res);
+
+  if (req.method === "OPTIONS") {
+    if (hasCorsHeaders || !req.headers.origin) {
+      return res.sendStatus(204);
+    }
+    return res.status(403).json({ message: "CORS origin not allowed." });
+  }
+
+  return next();
+});
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // handle preflight
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
@@ -230,6 +308,8 @@ async function startServer() {
   }
 }
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
 
 module.exports = app;
