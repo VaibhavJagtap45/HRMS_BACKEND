@@ -1,20 +1,30 @@
 const nodemailer = require("nodemailer");
 
 /**
- * Build a nodemailer transporter from environment variables.
+ * Lazily-built, cached nodemailer transporter.
  *
- * Required env vars (set in .env):
+ * Required env vars (set in .env / host dashboard):
  *   SMTP_HOST      — e.g. smtp.gmail.com
  *   SMTP_PORT      — e.g. 587
- *   SMTP_SECURE    — "true" for port 465, "false" for STARTTLS
+ *   SMTP_SECURE    — "true" for port 465, "false" for STARTTLS on 587
  *   SMTP_USER      — sender email address
- *   SMTP_PASS      — app password / SMTP password
+ *   SMTP_PASS      — app password / SMTP password (Gmail: a 16-char App Password)
  *   EMAIL_FROM     — display name, e.g. "HRMS Albos"
  *
  * For Gmail: enable 2FA and use an App Password as SMTP_PASS.
  */
-function buildTransporter() {
-  return nodemailer.createTransport({
+let cachedTransporter = null;
+
+function isSmtpConfigured() {
+  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+}
+
+function getTransporter() {
+  if (cachedTransporter) {
+    return cachedTransporter;
+  }
+
+  cachedTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || "smtp.gmail.com",
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === "true",
@@ -22,11 +32,45 @@ function buildTransporter() {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    // Reuse connections across sends.
+    pool: true,
+    maxConnections: 3,
+    // Fail fast instead of leaving a password-reset request hanging when the
+    // SMTP host is unreachable (common on free-tier hosts with cold sockets).
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
+
+  return cachedTransporter;
 }
 
-function isSmtpConfigured() {
-  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+/**
+ * Verify SMTP connectivity & credentials. Call once at startup so a
+ * misconfiguration surfaces in the logs immediately, instead of only when a
+ * user actually tries to reset their password. Never throws.
+ */
+async function verifyTransport() {
+  if (!isSmtpConfigured()) {
+    console.warn(
+      "[mailer] SMTP not configured (SMTP_USER / SMTP_PASS missing). " +
+        "Reset emails will NOT be sent — the OTP is returned in the API response for dev only.",
+    );
+    return false;
+  }
+
+  try {
+    await getTransporter().verify();
+    console.log(
+      `[mailer] SMTP ready — ${process.env.SMTP_HOST || "smtp.gmail.com"}:${
+        process.env.SMTP_PORT || 587
+      } as ${process.env.SMTP_USER}`,
+    );
+    return true;
+  } catch (error) {
+    console.error("[mailer] SMTP verification FAILED:", error.message);
+    return false;
+  }
 }
 
 /**
@@ -39,11 +83,11 @@ async function sendPasswordResetEmail({ to, name, resetUrl }) {
     return false;
   }
 
-  const transporter = buildTransporter();
+  const transporter = getTransporter();
   const fromName = process.env.EMAIL_FROM || "HRMS Albos";
   const fromAddress = process.env.SMTP_USER;
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: `"${fromName}" <${fromAddress}>`,
     to,
     subject: "Reset Your HRMS Password",
@@ -117,6 +161,7 @@ async function sendPasswordResetEmail({ to, name, resetUrl }) {
     text: `Hi ${name},\n\nReset your HRMS password using the link below (valid for 1 hour):\n\n${resetUrl}\n\nIf you did not request this, ignore this email.\n\nAlbos Technology HRMS`,
   });
 
+  console.log(`[mailer] Password-reset email sent to ${to} (messageId=${info.messageId})`);
   return true;
 }
 
@@ -127,11 +172,11 @@ async function sendPasswordResetEmail({ to, name, resetUrl }) {
 async function sendOtpEmail({ to, name, otp }) {
   if (!isSmtpConfigured()) return false;
 
-  const transporter = buildTransporter();
+  const transporter = getTransporter();
   const fromName = process.env.EMAIL_FROM || "HRMS Albos";
   const fromAddress = process.env.SMTP_USER;
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: `"${fromName}" <${fromAddress}>`,
     to,
     subject: "Your HRMS Password Reset OTP",
@@ -182,7 +227,13 @@ async function sendOtpEmail({ to, name, otp }) {
     text: `Hi ${name},\n\nYour HRMS password reset OTP is: ${otp}\n\nValid for 10 minutes. Do not share this with anyone.\n\nAlbos Technology HRMS`,
   });
 
+  console.log(`[mailer] OTP email sent to ${to} (messageId=${info.messageId})`);
   return true;
 }
 
-module.exports = { sendPasswordResetEmail, sendOtpEmail, isSmtpConfigured };
+module.exports = {
+  sendPasswordResetEmail,
+  sendOtpEmail,
+  isSmtpConfigured,
+  verifyTransport,
+};

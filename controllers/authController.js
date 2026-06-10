@@ -497,13 +497,23 @@ function sendAuthPayload(res, user, statusCode = 200) {
   });
 }
 
-async function findUserByIdentifier(identifier) {
+// Returns a Mongoose query (thenable) so callers can `await` it directly or
+// chain `.select(...)`. NOTE: this is intentionally NOT `async` — an async
+// function would resolve to a plain document, and chaining `.select()` on the
+// returned Promise silently yields `undefined`.
+function findUserByIdentifier(identifier, selectFields) {
   const id = String(identifier || "").trim();
-  if (!id) return null;
+  if (!id) return Promise.resolve(null);
 
-  return User.findOne({
+  const query = User.findOne({
     $or: [{ email: id.toLowerCase() }, { employeeId: id.toUpperCase() }],
   });
+
+  if (selectFields) {
+    query.select(selectFields);
+  }
+
+  return query;
 }
 
 async function login(req, res) {
@@ -809,7 +819,8 @@ async function sendOtp(req, res) {
       });
     }
 
-    const user = await findUserByIdentifier(identifier)?.select?.(
+    const user = await findUserByIdentifier(
+      identifier,
       "+passwordResetOtp +passwordResetOtpExpires",
     );
 
@@ -845,11 +856,27 @@ async function sendOtp(req, res) {
 
     await user.save({ validateBeforeSave: false });
 
-    const sent = await sendOtpEmail({
-      to: user.email,
-      name: user.name,
-      otp,
-    });
+    let sent = false;
+    try {
+      sent = await sendOtpEmail({
+        to: user.email,
+        name: user.name,
+        otp,
+      });
+    } catch (mailError) {
+      // Delivery failed (bad credentials, SMTP unreachable, etc.). Roll back the
+      // stored OTP so the cooldown doesn't lock the user out of an immediate
+      // retry, and return a clear, non-enumerating error.
+      console.error("sendOtp: failed to deliver OTP email:", mailError);
+      user.passwordResetOtp = null;
+      user.passwordResetOtpExpires = null;
+      await user.save({ validateBeforeSave: false });
+
+      return res.status(502).json({
+        message:
+          "We couldn't send the OTP email right now. Please try again in a few minutes.",
+      });
+    }
 
     if (!sent) {
       return res.json({

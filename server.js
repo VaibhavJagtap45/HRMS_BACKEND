@@ -106,6 +106,7 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const connectDB = require("./config/db");
+const { verifyTransport } = require("./utils/mailer");
 
 // Route modules
 const authRoutes = require("./routes/auth");
@@ -296,6 +297,10 @@ app.use((err, _req, res, _next) => {
 async function startServer() {
   try {
     await connectDB();
+
+    // Surface SMTP misconfiguration at boot rather than on first reset attempt.
+    // Non-blocking: the API still starts even if mail is down.
+    verifyTransport();
 
     app.listen(PORT, () => {
       console.log(`HRMS API running on port ${PORT}`);
