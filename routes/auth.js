@@ -41,23 +41,19 @@
 // module.exports = router;
 
 const express = require("express");
-const createRateLimiter = require("../middleware/rateLimiter");
 const { protect } = require("../middleware/authGuard");
 const authController = require("../controllers/authController");
 
 const router = express.Router();
 
-const authRateLimiter = createRateLimiter({
-  keyPrefix: "auth",
-  max: 10,
-  windowMs: 15 * 60 * 1000,
-});
-
-router.post("/login", authRateLimiter, authController.login);
-router.post("/forgot-password", authRateLimiter, authController.forgotPassword);
+// Rate limiting intentionally removed — auth endpoints are unthrottled so users
+// can log in, request OTPs, and reset/change their password as many times as
+// they need without ever hitting a "Too many requests" error.
+router.post("/login", authController.login);
+router.post("/forgot-password", authController.forgotPassword);
 router.post("/reset-password", authController.resetPassword);
-router.post("/send-otp", authRateLimiter, authController.sendOtp);
-router.post("/verify-otp", authRateLimiter, authController.verifyOtp);
+router.post("/send-otp", authController.sendOtp);
+router.post("/verify-otp", authController.verifyOtp);
 router.post("/reset-password-otp", authController.resetPasswordOtp);
 
 router.post("/change-password", protect, authController.changePassword);

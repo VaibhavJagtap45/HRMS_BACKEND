@@ -833,19 +833,7 @@ async function sendOtp(req, res) {
       return res.json(safeRes);
     }
 
-    const now = Date.now();
-    const oneMinuteAgoThreshold = now + 9 * 60 * 1000;
-
-    if (
-      user.passwordResetOtpExpires &&
-      user.passwordResetOtpExpires.getTime() > oneMinuteAgoThreshold
-    ) {
-      return res.status(429).json({
-        message:
-          "An OTP was already sent recently. Please wait before requesting a new one.",
-      });
-    }
-
+    // No resend cooldown — users may request a fresh OTP as often as they like.
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const hashedOtp = crypto.createHash("sha256").update(otp).digest("hex");
 
