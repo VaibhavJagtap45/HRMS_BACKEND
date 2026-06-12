@@ -107,6 +107,7 @@ const cors = require("cors");
 const morgan = require("morgan");
 const connectDB = require("./config/db");
 const { verifyTransport } = require("./utils/mailer");
+const { startKeepAlive } = require("./utils/keepAlive");
 
 // Route modules
 const authRoutes = require("./routes/auth");
@@ -248,13 +249,18 @@ app.get("/", (_req, res) => {
   });
 });
 
-app.get(`${API_V1}/health`, (_req, res) => {
+function healthHandler(_req, res) {
   res.json({
     status: "ok",
     version: "v1",
     timestamp: new Date().toISOString(),
   });
-});
+}
+
+// Health check at both prefixes so the frontend's warm-up ping (baseURL = /api)
+// can reach it and wake the Render free-tier instance before the first login.
+app.get(`${API_V1}/health`, healthHandler);
+app.get(`${API}/health`, healthHandler);
 
 // Versioned routes
 app.use(`${API_V1}/auth`, authRoutes);
@@ -306,6 +312,9 @@ async function startServer() {
       console.log(`HRMS API running on port ${PORT}`);
       console.log(`Allowed origins: ${allowedOrigins.join(", ")}`);
       console.log(`Health: ${API_V1}/health`);
+
+      // Keep the Render free-tier instance warm so logins stay instant.
+      startKeepAlive();
     });
   } catch (err) {
     console.error("Failed to start server:", err);
