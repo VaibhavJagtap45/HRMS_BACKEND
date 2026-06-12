@@ -56,6 +56,9 @@ router.post("/send-otp", authController.sendOtp);
 router.post("/verify-otp", authController.verifyOtp);
 router.post("/reset-password-otp", authController.resetPasswordOtp);
 
+// Diagnostic (no secrets): GET /auth/mailer-status -> { configured, provider }
+router.get("/mailer-status", authController.mailerStatus);
+
 router.post("/change-password", protect, authController.changePassword);
 router.post("/logout", protect, authController.logout);
 router.get("/me", protect, authController.getMe);

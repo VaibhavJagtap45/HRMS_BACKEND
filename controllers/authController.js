@@ -452,7 +452,12 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const { DEFAULT_JWT_EXPIRES_IN } = require("../utils/constants");
-const { sendPasswordResetEmail, sendOtpEmail } = require("../utils/mailer");
+const {
+  sendPasswordResetEmail,
+  sendOtpEmail,
+  isMailerConfigured,
+  activeProvider,
+} = require("../utils/mailer");
 
 function parseCookieHeader(cookieHeader = "") {
   return cookieHeader.split(";").reduce((cookies, pair) => {
@@ -1008,6 +1013,17 @@ async function resetPasswordOtp(req, res) {
   }
 }
 
+// Safe, secret-free diagnostic: reports whether an email provider is configured
+// and which one is active (resend | smtp | null). Lets us verify the live
+// deployment's mail setup without exposing keys/addresses. Safe to remove later.
+async function mailerStatus(_req, res) {
+  return res.json({
+    configured: isMailerConfigured(),
+    provider: activeProvider(),
+    nodeEnv: process.env.NODE_ENV || null,
+  });
+}
+
 module.exports = {
   parseCookieHeader,
   generateToken,
@@ -1021,4 +1037,5 @@ module.exports = {
   verifyOtp,
   resetPasswordOtp,
   logout,
+  mailerStatus,
 };
