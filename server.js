@@ -308,7 +308,21 @@ async function startServer() {
     // Non-blocking: the API still starts even if mail is down.
     verifyTransport();
 
-    app.listen(PORT, () => {
+    const server = app.listen(PORT);
+
+    server.once("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(
+          `Port ${PORT} is already in use. Stop the running backend or set a different PORT in .env.`,
+        );
+        process.exit(1);
+      }
+
+      console.error("Failed to start HTTP server:", err);
+      process.exit(1);
+    });
+
+    server.once("listening", () => {
       console.log(`HRMS API running on port ${PORT}`);
       console.log(`Allowed origins: ${allowedOrigins.join(", ")}`);
       console.log(`Health: ${API_V1}/health`);
@@ -327,3 +341,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+module.exports.startServer = startServer;

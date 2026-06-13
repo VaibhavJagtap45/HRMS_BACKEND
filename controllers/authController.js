@@ -1013,14 +1013,34 @@ async function resetPasswordOtp(req, res) {
   }
 }
 
-// Safe, secret-free diagnostic: reports whether an email provider is configured
-// and which one is active (resend | smtp | null). Lets us verify the live
-// deployment's mail setup without exposing keys/addresses. Safe to remove later.
+// Safe, secret-free diagnostic: reports which email provider is active plus the
+// presence (NOT the values) of the relevant env vars, so a misnamed/missing
+// RESEND_API_KEY or leftover SMTP_* vars are obvious. Lists only the NAMES of
+// email/NODE_ENV-related env vars the process sees (names aren't secrets).
+// Safe to remove once OTP delivery is confirmed.
 async function mailerStatus(_req, res) {
+  const resendKey = process.env.RESEND_API_KEY || "";
+
+  const relevantEnvVarNames = Object.keys(process.env)
+    .filter((k) => /resend|smtp|^email_from$|^node_env$/i.test(k))
+    .sort();
+
   return res.json({
     configured: isMailerConfigured(),
     provider: activeProvider(),
     nodeEnv: process.env.NODE_ENV || null,
+    checks: {
+      RESEND_API_KEY_present: Boolean(resendKey),
+      RESEND_API_KEY_looksValid: resendKey.startsWith("re_"),
+      RESEND_FROM_EMAIL_present: Boolean(process.env.RESEND_FROM_EMAIL),
+      EMAIL_FROM_present: Boolean(process.env.EMAIL_FROM),
+      SMTP_vars_present: Boolean(
+        process.env.SMTP_HOST ||
+          process.env.SMTP_USER ||
+          process.env.SMTP_PASS,
+      ),
+    },
+    relevantEnvVarNames,
   });
 }
 

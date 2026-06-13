@@ -50,10 +50,14 @@ function countSundaysInMonth(year, month) {
  *   - "half-day" status → 0.5
  *   - "present" / "late" with workingHours > 0 and < 5 → 0.5 (auto half-day)
  *   - "present" / "late" otherwise → 1.0
+ *   - "wfh" / "on-duty" (approved regularization) → 1.0 full paid day
  *   - absent / holiday / leave → 0
  */
 function resolveAttendanceCredit(record) {
   if (record.status === "half-day") return 0.5;
+
+  // WFH / On-Duty are approved working days — always a full paid day.
+  if (["wfh", "on-duty"].includes(record.status)) return 1;
 
   if (["present", "late"].includes(record.status)) {
     const hours = Number(record.workingHours || 0);
