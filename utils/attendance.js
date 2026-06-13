@@ -21,6 +21,8 @@ const DAILY_STATUSES = [
   "half-day",
   "holiday",
   "leave",
+  "wfh",
+  "on-duty",
 ];
 
 function calculateWorkingHours(checkIn, checkOut) {
@@ -53,10 +55,14 @@ function sortEvents(events = []) {
 }
 
 function deriveAttendanceStatus(currentStatus, checkIn, checkOut) {
+  if (["wfh", "on-duty"].includes(currentStatus)) {
+    return currentStatus;
+  }
+
   if (
     !checkIn &&
     !checkOut &&
-    ["absent", "holiday", "leave", "half-day"].includes(currentStatus)
+    ["present", "absent", "holiday", "leave", "half-day"].includes(currentStatus)
   ) {
     return currentStatus;
   }

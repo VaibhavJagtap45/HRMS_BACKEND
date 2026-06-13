@@ -19,6 +19,13 @@ const categoryLabel = (value) =>
   REGULARIZATION_CATEGORIES.find((category) => category.value === value)
     ?.label || "Other";
 
+function buildAttendanceResponse(record) {
+  if (!record) return null;
+  const plainRecord = record.toObject ? record.toObject() : record;
+  plainRecord.employee = plainRecord.employeeId;
+  return plainRecord;
+}
+
 const formatRequestDate = (value) =>
   new Date(value).toLocaleDateString("en-IN", {
     day: "numeric",
@@ -278,6 +285,8 @@ exports.approveRequest = async (req, res) => {
       return res.status(400).json({ message: "Request is already reviewed." });
     }
 
+    let updatedAttendance = null;
+
     if (request.type === "present") {
       // ── Regularization: find-or-create the day record and mark present ────
       let record = await Attendance.findOne({
@@ -311,6 +320,7 @@ exports.approveRequest = async (req, res) => {
         record.status = outcome;
       }
       await record.save();
+      updatedAttendance = record;
       request.attendanceId = record._id;
     } else {
       // ── Time correction on the existing record ────────────────────────────
@@ -327,6 +337,7 @@ exports.approveRequest = async (req, res) => {
       // Re-sync computed fields (workingHours, status, isLate) from updated times
       syncAttendanceFromEvents(record);
       await record.save();
+      updatedAttendance = record;
     }
 
     request.status = "approved";
@@ -337,7 +348,18 @@ exports.approveRequest = async (req, res) => {
 
     await notifyEmployeeOfDecision(req.user._id, request, "approved");
 
-    res.json({ message: "Request approved and attendance updated.", request });
+    if (updatedAttendance) {
+      await updatedAttendance.populate(
+        "employeeId",
+        "employeeId name email department designation position fingerprintId",
+      );
+    }
+
+    res.json({
+      message: "Request approved and attendance updated.",
+      request,
+      attendance: buildAttendanceResponse(updatedAttendance),
+    });
   } catch (err) {
     console.error("approveRequest error:", err);
     res.status(500).json({ message: "Server error." });
